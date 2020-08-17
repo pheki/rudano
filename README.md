@@ -405,3 +405,8 @@ These differences are intentional (but subject to discussion):
 - Numbers with type suffixes are not supported (e.g. 15u64)
 - Vecs are serialized as `[1, 2, 3]`, not `vec![1, 2, 3]`
 - Arrays are serialized as tuples by default (because that's the default Serialize impl). Using `#[serde(serialize_with = "rudano::serialize_array")]` will make it serialize using array notation (as an `[]` sequence)
+
+# License
+
+This crate (library) is distributed under terms of MIT license or Apache License (Version 2.0), at your option.
+See `LICENSE-MIT` and `LICENSE-APACHE` for terms.
