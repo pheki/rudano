@@ -3,7 +3,7 @@
 [![Build Status](https://travis-ci.org/pheki/rudano.svg?branch=master)](https://travis-ci.org/pheki/rudano)
 [![Crate](https://img.shields.io/crates/v/rudano.svg)](https://crates.io/crates/rudano)
 [![API](https://docs.rs/rudano/badge.svg)](https://docs.rs/rudano)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.34+-green.svg)](https://github.com/pheki/rudano#rust-version-support)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.40+-green.svg)](https://github.com/pheki/rudano#rust-version-support)
 
 Rudano, Rust Data Notation, is a data serialization format designed to be as
 similar as possible to Rust's own syntax.
@@ -128,8 +128,8 @@ equivalent enum variants (Unit, NewType, Tuple and Struct).
 
 # Rust version support
 
-The MSRV is **1.34 or greater** and its tested with 1.34.2, stable, beta and
-nightly. Changing it will only be done in a minor (0.x) or higher release.
+The MSRV is **1.40 or greater** and its tested with 1.40.0, stable, beta and
+nightly. Changing it will only be done in a minor (0.x) or greater release.
 
 # Data Types
 
