@@ -1,0 +1,25 @@
+[package]
+name = "rudano"
+version = "0.1.0"
+authors = ["Aphek <bilkow@tutanota.com>"]
+edition = "2018"
+description = "A data serialization format as similar as possible to Rust's own syntax"
+documentation = "https://docs.rs/rudano"
+homepage = "https://github.com/pheki/rudano/"
+repository = "https://github.com/pheki/rudano/"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["serde", "rudano"]
+categories = ["encoding"]
+
+[badges]
+travis-ci = { repository = "pheki/rudano", branch = "master" }
+
+[dependencies]
+serde = "1"
+num-traits = "0.2"
+itoa = { version = "0.4", features = ["i128"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"]}
+rand = "0.7"

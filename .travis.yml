@@ -1,0 +1,28 @@
+language: rust
+sudo: false
+
+rust: 
+  - 1.34.2
+  - stable
+  - beta
+  - nightly
+os: 
+  - linux
+  - osx
+  - windows
+before_script:
+  - rustup component add rustfmt
+script:
+  - cargo build
+  - cargo test
+  - cargo fmt --all -- --check
+
+cache: cargo
+
+jobs:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true
+
+git:
+  depth: false
