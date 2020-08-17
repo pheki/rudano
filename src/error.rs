@@ -25,6 +25,7 @@ pub struct DeserializationError {
 }
 
 /// Deserialization Error Code, possibly with related data (such as invalid char).
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum DeserializationErrorCode {
     CustomError(String),
@@ -63,9 +64,6 @@ pub enum DeserializationErrorCode {
     ExpectedMapEnd(char),
     ExpectedMapStructColon(char),
     ExpectedMapStructComma(char),
-
-    #[doc(hidden)]
-    NonExhaustive,
 }
 
 impl de::Error for DeserializationError {
@@ -169,7 +167,6 @@ impl Display for DeserializationError {
             ExpectedMapStructComma(c) => {
                 formatter.write_fmt(format_args!("expected ',', found {:?}", c))
             }
-            NonExhaustive => formatter.write_str("this variant should not be used"),
         }
     }
 }
