@@ -26,12 +26,17 @@ chosen to be delimited with `[]`. Its explained why in [its spec](#map).
 Consider the following imaginary rust structure:
 
 ```rust
-use std::net::IpAddr;
+#[derive(Serialize, Deserialize)]
+enum Ip {
+    V4(u8, u8, u8, u8),
+    V6(u8, u8, u8, u8, u8, u8, u8, u8),
+}
 
+#[derive(Serialize, Deserialize)]
 struct Network {
     name: String,
-    local_address: IpAddr,
-    hosts: HashMap<String, IpAddr>,
+    local_address: Ip,
+    hosts: HashMap<String, Ip>,
 }
 ```
 
@@ -44,7 +49,7 @@ Network {
     // Enums are supported
     local_address: V4(192, 168, 0, 100),
     hosts: [
-        "Foo": V6(0, 0, 0, 0, 0, 0xA3),
+        "Foo": V6(0, 0, 0, 0, 0, 0, 0, 0xA3),
         "Bar": V4(192, 168, 0, 104),
     ], // Trailing comma is allowed
 }
@@ -59,7 +64,7 @@ Network (
     // Enums are supported
     local_address: V4(192, 168, 0, 100),
     hosts: {
-        "Foo": V6(0, 0, 0, 0, 0, 0xA3),
+        "Foo": V6(0, 0, 0, 0, 0, 0, 0, 0xA3),
         "Bar": V4(192, 168, 0, 104),
     }, // Trailing comma is allowed
 )
@@ -75,7 +80,7 @@ In JSON, comments are not allowed, but I hope it speaks by itself:
     },
     "hosts": {
         "Foo": {
-            "V6": [0, 0, 0, 0, 0, 0xA3]
+            "V6": [0, 0, 0, 0, 0, 0, 0, 0xA3]
         },
         "Bar": {
             "V4": [192, 168, 0, 104]
