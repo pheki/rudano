@@ -1,7 +1,5 @@
 //! Utilities for serializing data structures into Rudano.
 
-use std::fmt::Write;
-
 use serde::{ser, Serialize};
 
 use crate::error::{SerializationError as Error, SerializationResult as Result};
@@ -218,26 +216,14 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
-        // Checks if float has no fractionary part
-        if v.fract() == 0.0 {
-            // Prints with single precision (to look like a float)
-            write!(self.output, "{:.1}", v)?;
-        } else {
-            // Prints with full precision
-            write!(self.output, "{}", v)?;
-        }
+        let mut buffer = ryu::Buffer::new();
+        self.output.push_str(buffer.format(v));
         Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<()> {
-        // Checks if float has no fractionary part
-        if v.fract() == 0.0 {
-            // Prints with single precision (to look like a float)
-            write!(self.output, "{:.1}", v)?;
-        } else {
-            // Prints with full precision
-            write!(self.output, "{}", v)?;
-        }
+        let mut buffer = ryu::Buffer::new();
+        self.output.push_str(buffer.format(v));
         Ok(())
     }
 
@@ -886,7 +872,7 @@ mod tests {
             (43.0, r"43.0"),
             (239.34, r"239.34"), // Floating point comparison problems
             (-37.3, r"-37.3"),
-            (-37.0E+12, r"-36999998210048.0"),
+            (-37.0E+12, r"-3.7e13"),
             (-92., r"-92.0"),
             (std::f32::INFINITY, r"inf"),
             (std::f32::NEG_INFINITY, r"-inf"),
