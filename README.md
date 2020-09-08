@@ -407,6 +407,7 @@ different than structs, which was one of RON's original motivations.
 
 These differences are intentional (but subject to discussion):
 - Float types without decimal point are allowed
+- `NaN`, `inf` and `-inf` are represented as such (its how rustc prints them), even though they're not valid literals.
 - Numbers with type suffixes are not supported (e.g. 15u64)
 - Vecs are serialized as `[1, 2, 3]`, not `vec![1, 2, 3]`
 - Arrays are serialized as tuples by default (because that's the default Serialize impl). Using `#[serde(serialize_with = "rudano::serialize_array")]` will make it serialize using array notation (as an `[]` sequence)
