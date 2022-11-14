@@ -128,12 +128,12 @@ enum Object {
 ```
 
 The serialized value `Point { position: (10, 20), "Great Point!" }` is valid
-both as a Point and an Object. This is valid for all struct types and their
+both as a `Point` and an `Object`. This is valid for all struct types and their
 equivalent enum variants (Unit, NewType, Tuple and Struct).
 
 # Rust version support
 
-The MSRV is **1.40 or greater** and its tested with 1.40.0, stable, beta and
+The MSRV is **1.40 or greater** and it's tested with 1.40.0, stable, beta and
 nightly. Changing it will only be done in a minor (0.x) or greater release.
 
 # Data Types
