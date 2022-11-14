@@ -14,7 +14,7 @@ pub type DeserializationResult<T> = std::result::Result<T, DeserializationError>
 pub type SerializationResult<T> = std::result::Result<T, SerializationError>;
 
 /// Information on data deserialization error.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeserializationError {
     /// Error code, possibly with related data.
     pub code: DeserializationErrorCode,
@@ -26,7 +26,7 @@ pub struct DeserializationError {
 
 /// Deserialization Error Code, possibly with related data (such as invalid char).
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeserializationErrorCode {
     CustomError(String),
 
@@ -174,7 +174,7 @@ impl Display for DeserializationError {
 impl std::error::Error for DeserializationError {}
 
 /// All possible errors that may occur when Serializing Rudano.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SerializationError {
     /// Custom Error. This is usually created by the Serialize implementation of the data being
     /// serialized.
@@ -189,9 +189,7 @@ impl ser::Error for SerializationError {
 
 impl Display for SerializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let msg = match *self {
-            SerializationError::CustomError(ref msg) => msg,
-        };
+        let SerializationError::CustomError(ref msg) = *self;
 
         formatter.write_str(msg)
     }

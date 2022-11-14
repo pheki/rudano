@@ -103,6 +103,7 @@ pub struct Deserializer<'de> {
 
 impl<'de> Deserializer<'de> {
     /// Creates a deserializer from the given `str`.
+    #[allow(clippy::should_implement_trait)] // https://github.com/rust-lang/rust-clippy/issues/9762
     pub fn from_str(input: &'de str) -> Self {
         Deserializer {
             input,
@@ -387,8 +388,7 @@ impl<'de> Deserializer<'de> {
                 // ASCII escapes
                 'x' => {
                     let c = u32::from_str_radix(
-                        &self
-                            .input
+                        self.input
                             .get(..2)
                             .ok_or_else(|| self.error(ErrorCode::UnexpectedEof))?,
                         16,
@@ -502,19 +502,13 @@ impl<'de> Deserializer<'de> {
         };
 
         // Checks if first char was a digit
-        if self.peek_char()?.is_digit(10) {
+        if self.peek_char()?.is_ascii_digit() {
             return Err(self.error(ErrorCode::ExpectedIdentifier(self.peek_char()?)));
         }
 
-        // Checks if first char was an _
-        if self.peek_char()? == '_' {
-            if count <= 1 {
-                return Err(self.error(ErrorCode::ExpectedIdentifier(self.peek_char()?)));
-            }
-        } else {
-            if count < 1 {
-                return Err(self.error(ErrorCode::ExpectedIdentifier(self.peek_char()?)));
-            }
+        // Identifiers must have at least one character, or two if it starts with `_`
+        if self.peek_char()? == '_' && count <= 1 || count < 1 {
+            return Err(self.error(ErrorCode::ExpectedIdentifier(self.peek_char()?)));
         }
 
         let v = &self.input[..end_i];
@@ -602,8 +596,9 @@ impl<'de> Deserializer<'de> {
                 // _ => panic!(),
             }
         } else {
-            let n_base = u128::from_u32(base).unwrap(); // Cannot fail as maximum returned value is 16
-                                                        // base * acc - c.to_digit(base)
+            // Unwrap cannot fail as maximum returned value is 16
+            let n_base = u128::from_u32(base).unwrap();
+            // base * acc - c.to_digit(base)
             let n = chars
                 .try_fold(u128::zero(), |acc, c| {
                     n_base
@@ -624,6 +619,8 @@ impl<'de> Deserializer<'de> {
             const MAX_U64: u128 = u64::MAX as u128;
             const MAX_U128: u128 = u128::MAX;
 
+            // Note that the ranges overlap and the order matters.
+            #[allow(clippy::match_overlapping_arm)]
             match n {
                 0..=MAX_U8 => Integer::U8(n as u8),
                 0..=MAX_U16 => Integer::U16(n as u16),
@@ -714,10 +711,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 }
                 _id => {
                     self.skip_whitespace()?;
-                    // peek_char's error can only be EOF, in which case it should also map to the unit type
+                    // peek_char's error can only be EOF, in which case it should also map to the
+                    // unit struct
                     match self.peek_char().unwrap_or('_') {
                         '{' => {
-                            // If it's empty, serde understands it as a "Unit Struct" and we need to use visit_unit
+                            // If it's empty, serde understands it as a "Unit Struct" and we need to
+                            // use visit_unit
                             let mut temp_deserializer = Deserializer {
                                 input: self.input,
                                 original_input: self.original_input,
@@ -944,7 +943,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         }
     }
 
-    fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value>
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -953,7 +952,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         match self.next_char()? {
             '[' => {
                 // Give the visitor access to each element of the sequence.
-                let value = visitor.visit_seq(CommaSeparated::new(&mut self))?;
+                let value = visitor.visit_seq(CommaSeparated::new(self))?;
                 // Parse the closing bracket of the sequence.
                 self.skip_whitespace()?;
                 match self.next_char()? {
@@ -1018,7 +1017,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         self.deserialize_tuple(len, visitor)
     }
 
-    fn deserialize_map<V>(mut self, visitor: V) -> Result<V::Value>
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -1027,7 +1026,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         match self.next_char()? {
             '[' => {
                 // Gives the visitor access to each entry of the map.
-                let value = visitor.visit_map(CommaSeparated::new(&mut self))?;
+                let value = visitor.visit_map(CommaSeparated::new(self))?;
 
                 // Skips trailing comma if needed
                 self.skip_whitespace()?;

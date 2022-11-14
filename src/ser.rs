@@ -416,7 +416,7 @@ pub struct SeqSerializer<'a> {
     format: SeqFormat,
 }
 
-impl<'a> ser::SerializeSeq for SeqSerializer<'_> {
+impl ser::SerializeSeq for SeqSerializer<'_> {
     type Ok = ();
     type Error = Error;
 
