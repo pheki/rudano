@@ -1,16 +1,17 @@
 //! Utilities for deserializing data structures from Rudano.
 
 use std::borrow::Cow;
-use std::fmt::Formatter;
 use std::num::NonZeroUsize;
 use std::str;
 
-use serde::de::{self, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
+use serde::de::{
+    self, DeserializeSeed, EnumAccess, IgnoredAny, MapAccess, SeqAccess, VariantAccess, Visitor,
+};
 use serde::Deserialize;
 
 use num_traits::cast::FromPrimitive;
 use num_traits::ops::checked::{CheckedAdd, CheckedMul, CheckedSub};
-use num_traits::Num;
+use num_traits::{Num, Zero};
 
 use crate::error::{
     DeserializationError as Error, DeserializationErrorCode as ErrorCode,
@@ -36,6 +37,19 @@ impl ParseCharResult {
             EscapedChar(c) => Some(*c),
         }
     }
+}
+
+enum Integer {
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    I128(i128),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    U128(u128),
 }
 
 /// Deserializes the given `str` as a value of type `T`.
@@ -508,6 +522,121 @@ impl<'de> Deserializer<'de> {
         Ok(v)
     }
 
+    fn parse_any_integer(&mut self) -> Result<Integer> {
+        let mut new_input = self.input;
+        // Gets sign and removes it from input
+        let negative = if self.peek_char()? == '-' {
+            new_input = &self.input['-'.len_utf8()..];
+            true
+        } else {
+            false
+        };
+
+        // Gets base and removes it from input
+        let base = self.get_base(new_input)?;
+        if base != 10 {
+            new_input = &new_input[2..];
+        }
+
+        // Gets position where the number (without suffix) itself ends
+        let end_i = self.count_digits(new_input, base);
+        if end_i == 0 {
+            let next_char = new_input
+                .chars()
+                .next()
+                .ok_or_else(|| self.error(ErrorCode::UnexpectedEof))?;
+            return Err(self.error(ErrorCode::ExpectedInteger(next_char)));
+        }
+
+        // Ending integers with '.' is disallowed, as it would be a float.
+        if let Some(next_char @ '.') = new_input.chars().nth(end_i) {
+            return Err(self.error(ErrorCode::ExpectedInteger(next_char)));
+        }
+
+        // Gets position where the literal (including suffix) ends
+        let end_literal_i = new_input
+            .char_indices()
+            .skip(end_i)
+            .find(|(_i, c)| !c.is_alphanumeric())
+            .map(|(i, _c)| i)
+            .unwrap_or(new_input.len()); // Assume it ends at the end of input
+
+        // As of now, no suffix is allowed
+        if end_i != end_literal_i {
+            return Err(self.error(ErrorCode::InvalidSuffix(
+                new_input[end_i..end_literal_i].to_string(),
+            )));
+        }
+
+        let mut chars = new_input[..end_i].chars().filter(|c| *c != '_');
+
+        let integer = if negative {
+            let n_base = i128::from_u32(base).unwrap(); // Cannot fail as maximum returned value is 16
+                                                        // base * acc - c.to_digit(base)
+            let n = chars
+                .try_fold(i128::zero(), |acc, c| {
+                    n_base
+                        .checked_mul(acc)?
+                        .checked_sub(i128::from_u32(c.to_digit(base).unwrap()).unwrap())
+                })
+                .ok_or_else(|| {
+                    self.error(ErrorCode::IntegerOutOfRange(
+                        self.input[..end_i + subslice_offset(self.input, new_input)].to_string(),
+                    ))
+                })?;
+
+            // We should just use i128::from when const from is stabilized:
+            // Tracking issue: https://github.com/rust-lang/rust/issues/87852
+            const MIN_I8: i128 = i8::MIN as i128;
+            const MIN_I16: i128 = i16::MIN as i128;
+            const MIN_I32: i128 = i32::MIN as i128;
+            const MIN_I64: i128 = i64::MIN as i128;
+            const MIN_I128: i128 = i128::MIN;
+
+            match n {
+                MIN_I8.. => Integer::I8(n as i8),
+                MIN_I16.. => Integer::I16(n as i16),
+                MIN_I32.. => Integer::I32(n as i32),
+                MIN_I64.. => Integer::I64(n as i64),
+                MIN_I128.. => Integer::I128(n as i128),
+                // _ => panic!(),
+            }
+        } else {
+            let n_base = u128::from_u32(base).unwrap(); // Cannot fail as maximum returned value is 16
+                                                        // base * acc - c.to_digit(base)
+            let n = chars
+                .try_fold(u128::zero(), |acc, c| {
+                    n_base
+                        .checked_mul(acc)?
+                        .checked_add(u128::from_u32(c.to_digit(base).unwrap()).unwrap())
+                })
+                .ok_or_else(|| {
+                    self.error(ErrorCode::IntegerOutOfRange(
+                        self.input[..end_i + subslice_offset(self.input, new_input)].to_string(),
+                    ))
+                })?;
+
+            // We should just use i128::from when const from is stabilized:
+            // Tracking issue: https://github.com/rust-lang/rust/issues/87852
+            const MAX_U8: u128 = u8::MAX as u128;
+            const MAX_U16: u128 = u16::MAX as u128;
+            const MAX_U32: u128 = u32::MAX as u128;
+            const MAX_U64: u128 = u64::MAX as u128;
+            const MAX_U128: u128 = u128::MAX;
+
+            match n {
+                0..=MAX_U8 => Integer::U8(n as u8),
+                0..=MAX_U16 => Integer::U16(n as u16),
+                0..=MAX_U32 => Integer::U32(n as u32),
+                0..=MAX_U64 => Integer::U64(n as u64),
+                0..=MAX_U128 => Integer::U128(n as u128),
+            }
+        };
+
+        self.input = &new_input[end_i..];
+        Ok(integer)
+    }
+
     fn deserialize_struct_inner<V: Visitor<'de>>(
         &mut self,
         _fields: &'static [&'static str],
@@ -516,7 +645,7 @@ impl<'de> Deserializer<'de> {
         // Parses opening brace of the struct.
         if self.next_char()? == '{' {
             // Give the visitor access to each entry of the struct.
-            let value = visitor.visit_map(CommaSeparated::new(self))?;
+            let value = visitor.visit_map(CommaSeparatedStruct::new(self))?;
             // Parses the closing brace of the struct.
             self.skip_whitespace()?;
             match self.next_char()? {
@@ -541,28 +670,20 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 
         if let Ok(b) = self.parse_bool() {
             visitor.visit_bool(b)
-        } else if let Ok(n) = self.parse_integer::<u8>() {
-            visitor.visit_u8(n)
-        } else if let Ok(n) = self.parse_integer::<i8>() {
-            visitor.visit_i8(n)
-        } else if let Ok(n) = self.parse_integer::<u16>() {
-            visitor.visit_u16(n)
-        } else if let Ok(n) = self.parse_integer::<i16>() {
-            visitor.visit_i16(n)
-        } else if let Ok(n) = self.parse_integer::<u32>() {
-            visitor.visit_u32(n)
-        } else if let Ok(n) = self.parse_integer::<i32>() {
-            visitor.visit_i32(n)
-        } else if let Ok(n) = self.parse_integer::<u64>() {
-            visitor.visit_u64(n)
-        } else if let Ok(n) = self.parse_integer::<i64>() {
-            visitor.visit_i64(n)
-        } else if let Ok(n) = self.parse_integer::<u128>() {
-            visitor.visit_u128(n)
-        } else if let Ok(n) = self.parse_integer::<i128>() {
-            visitor.visit_i128(n)
-        } else if let Ok(n) = self.parse_f32() {
-            visitor.visit_f32(n)
+        } else if let Ok(n) = self.parse_any_integer() {
+            use Integer::*;
+            match n {
+                I8(n) => visitor.visit_i8(n),
+                I16(n) => visitor.visit_i16(n),
+                I32(n) => visitor.visit_i32(n),
+                I64(n) => visitor.visit_i64(n),
+                I128(n) => visitor.visit_i128(n),
+                U8(n) => visitor.visit_u8(n),
+                U16(n) => visitor.visit_u16(n),
+                U32(n) => visitor.visit_u32(n),
+                U64(n) => visitor.visit_u64(n),
+                U128(n) => visitor.visit_u128(n),
+            }
         } else if let Ok(n) = self.parse_f64() {
             visitor.visit_f64(n)
         } else if self.peek_char()? == '\'' {
@@ -571,7 +692,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             self.deserialize_str(visitor)
         } else if self.peek_char()? == '[' {
             // Checks if it can deserialize as a sequence
-            if self.deserialize_seq(IgnoringVisitor).is_ok() {
+            if self.deserialize_seq(IgnoredAny).is_ok() {
                 self.input = original_input;
                 self.deserialize_seq(visitor)
             } else {
@@ -579,7 +700,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 self.deserialize_map(visitor)
             }
         } else if self.peek_char()? == '(' {
-            self.deserialize_tuple(0, visitor)
+            if self.deserialize_unit(IgnoredAny).is_ok() {
+                visitor.visit_unit()
+            } else {
+                self.input = original_input;
+                self.deserialize_tuple(0, visitor)
+            }
         } else if let Ok(id) = self.parse_identifier() {
             match id {
                 "Some" | "None" => {
@@ -588,9 +714,24 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 }
                 _id => {
                     self.skip_whitespace()?;
-                    // peek_char's error can only be EOF, in which case it should map to the unit type
+                    // peek_char's error can only be EOF, in which case it should also map to the unit type
                     match self.peek_char().unwrap_or('_') {
-                        '{' => self.deserialize_struct_inner(&[], visitor),
+                        '{' => {
+                            // If it's empty, serde understands it as a "Unit Struct" and we need to use visit_unit
+                            let mut temp_deserializer = Deserializer {
+                                input: self.input,
+                                original_input: self.original_input,
+                            };
+                            temp_deserializer.next_char()?;
+                            temp_deserializer.skip_whitespace()?;
+                            match temp_deserializer.next_char()? {
+                                '}' => {
+                                    self.input = temp_deserializer.input;
+                                    visitor.visit_unit()
+                                }
+                                _ => self.deserialize_struct_inner(&[], visitor),
+                            }
+                        }
                         '(' => self.deserialize_tuple(0, visitor),
                         _ => visitor.visit_unit(),
                     }
@@ -1056,6 +1197,252 @@ impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
     }
 }
 
+// Needed specifically for deserialize_any
+struct CommaSeparatedStruct<'a, 'de: 'a> {
+    de: &'a mut Deserializer<'de>,
+    /// Whether we are in the first element of the struct
+    first: bool,
+}
+
+impl<'a, 'de> CommaSeparatedStruct<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>) -> Self {
+        CommaSeparatedStruct { de, first: true }
+    }
+}
+
+impl<'de, 'a> MapAccess<'de> for CommaSeparatedStruct<'a, 'de> {
+    type Error = Error;
+
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
+    where
+        K: DeserializeSeed<'de>,
+    {
+        // Checks if there is comma before entry / trailing comma
+        self.de.skip_whitespace()?;
+        let has_comma = if self.de.peek_char()? == ',' {
+            self.de.next_char()?;
+            true
+        } else {
+            false
+        };
+
+        // Checks if there are no more entries.
+        self.de.skip_whitespace()?;
+        if self.de.peek_char()? == ']' || self.de.peek_char()? == '}' {
+            return Ok(None);
+        }
+
+        // Comma is required before every entry except the first.
+        if !self.first && !has_comma {
+            return Err(self
+                .de
+                .error(ErrorCode::ExpectedMapStructComma(self.de.peek_char()?)));
+        }
+
+        self.first = false;
+
+        // Deserializes map key.
+        self.de.skip_whitespace()?;
+
+        seed.deserialize(StructIdentifierDeserializer(&mut *self.de))
+            .map(Some)
+    }
+
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value>
+    where
+        V: DeserializeSeed<'de>,
+    {
+        match self.de.next_char()? {
+            ':' => (),
+            c => return Err(self.de.error(ErrorCode::ExpectedMapStructColon(c))),
+        }
+
+        // Deserializes map value.
+        seed.deserialize(&mut *self.de)
+    }
+}
+
+struct StructIdentifierDeserializer<'a, 'de>(&'a mut Deserializer<'de>);
+
+impl<'a, 'de> de::Deserializer<'de> for StructIdentifierDeserializer<'a, 'de> {
+    type Error = <&'a mut Deserializer<'de> as de::Deserializer<'de>>::Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_identifier(visitor)
+    }
+
+    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_bool(visitor)
+    }
+
+    fn deserialize_i8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_i8(visitor)
+    }
+
+    fn deserialize_i16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_i16(visitor)
+    }
+
+    fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_i32(visitor)
+    }
+
+    fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_i64(visitor)
+    }
+
+    fn deserialize_i128<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_i128(visitor)
+    }
+
+    fn deserialize_u8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_u8(visitor)
+    }
+
+    fn deserialize_u16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_u16(visitor)
+    }
+
+    fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_u32(visitor)
+    }
+
+    fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_u64(visitor)
+    }
+
+    fn deserialize_u128<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_u128(visitor)
+    }
+
+    fn deserialize_f32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_f32(visitor)
+    }
+
+    fn deserialize_f64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_f64(visitor)
+    }
+
+    fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_char(visitor)
+    }
+
+    fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_str(visitor)
+    }
+
+    fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_string(visitor)
+    }
+
+    fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_bytes(visitor)
+    }
+
+    fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_byte_buf(visitor)
+    }
+
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        self.0.deserialize_option(visitor)
+    }
+
+    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_unit(visitor)
+    }
+
+    fn deserialize_unit_struct<V>(self, name: &'static str, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_unit_struct(name, visitor)
+    }
+
+    fn deserialize_newtype_struct<V>(self, name: &'static str, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_newtype_struct(name, visitor)
+    }
+
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_seq(visitor)
+    }
+
+    fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_tuple(len, visitor)
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_tuple_struct(name, len, visitor)
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_map(visitor)
+    }
+
+    fn deserialize_struct<V>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_struct(name, fields, visitor)
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_enum(name, variants, visitor)
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_identifier(visitor)
+    }
+
+    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.0.deserialize_ignored_any(visitor)
+    }
+}
+
 struct Enum<'a, 'de: 'a> {
     de: &'a mut Deserializer<'de>,
 }
@@ -1133,116 +1520,6 @@ impl<'de, 'a> VariantAccess<'de> for Enum<'a, 'de> {
     {
         self.de.skip_whitespace()?;
         self.de.deserialize_struct_inner(fields, visitor)
-    }
-}
-
-/// Visitor that just ignores any type it receives and returns ().
-struct IgnoringVisitor;
-
-impl<'de> Visitor<'de> for IgnoringVisitor {
-    type Value = ();
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        write!(formatter, "anything...")
-    }
-
-    fn visit_bool<E: de::Error>(self, _v: bool) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_i8<E: de::Error>(self, _v: i8) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_i16<E: de::Error>(self, _v: i16) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_i32<E: de::Error>(self, _v: i32) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_i64<E: de::Error>(self, _v: i64) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_i128<E: de::Error>(self, _v: i128) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_u8<E: de::Error>(self, _v: u8) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_u16<E: de::Error>(self, _v: u16) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_u32<E: de::Error>(self, _v: u32) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_u64<E: de::Error>(self, _v: u64) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_u128<E: de::Error>(self, _v: u128) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_f32<E: de::Error>(self, _v: f32) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_f64<E: de::Error>(self, _v: f64) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_char<E: de::Error>(self, _v: char) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_str<E: de::Error>(self, _v: &str) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_borrowed_str<E: de::Error>(self, _v: &'de str) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_string<E: de::Error>(self, _v: String) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_bytes<E: de::Error>(self, _v: &[u8]) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_borrowed_bytes<E: de::Error>(
-        self,
-        _v: &'de [u8],
-    ) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_byte_buf<E: de::Error>(self, _v: Vec<u8>) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_none<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_some<D: de::Deserializer<'de>>(
-        self,
-        _deserializer: D,
-    ) -> std::result::Result<Self::Value, D::Error> {
-        Ok(())
-    }
-    fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
-        Ok(())
-    }
-    fn visit_newtype_struct<D: de::Deserializer<'de>>(
-        self,
-        _deserializer: D,
-    ) -> std::result::Result<Self::Value, D::Error> {
-        Ok(())
-    }
-    fn visit_seq<A>(self, _seq: A) -> std::result::Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        Ok(())
-    }
-    fn visit_map<A>(self, _map: A) -> std::result::Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        Ok(())
-    }
-    fn visit_enum<A>(self, _data: A) -> std::result::Result<Self::Value, A::Error>
-    where
-        A: EnumAccess<'de>,
-    {
-        Ok(())
     }
 }
 
@@ -1965,5 +2242,157 @@ mod tests {
         );
         let deserialized: HashMap<Vec<u64>, HashMap<u8, &str>> = from_str(&text).unwrap();
         assert_eq!(deserialized, expected);
+    }
+
+    #[test]
+    pub fn deserialize_any() {
+        use Enum::*;
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        #[serde(untagged)]
+        enum Enum {
+            Bool(bool),
+            U8(u8),
+            I8(i8),
+            U16(u16),
+            I16(i16),
+            U32(u32),
+            I32(i32),
+            U64(u64),
+            I64(i64),
+            // Unfortunately serde's untagged enums do not support 128-bit
+            // integers: https://github.com/serde-rs/serde/issues/1717
+            // U128(u128),
+            // I128(i128),
+            F64(f64),
+            Char(char),
+            StringVariant(String),
+            Sequence([u8; 4]),
+            Map(HashMap<i32, i32>),
+            Unit(()),
+            Tuple((i32, i32)),
+            OptionVariant(Option<i32>),
+            StructVariant(Struct),
+            UnitStructVariant(UnitStruct),
+            TupleStructVariant(TupleStruct),
+        }
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Struct {
+            a: i32,
+            b: i32,
+        }
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct UnitStruct;
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct TupleStruct(i32, i32, i32);
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Variants {
+            bool: Enum,
+            u8: Enum,
+            i8: Enum,
+            u16: Enum,
+            i16: Enum,
+            u32: Enum,
+            i32: Enum,
+            u64: Enum,
+            i64: Enum,
+            f64: Enum,
+            char: Enum,
+            string: Enum,
+            sequence: Enum,
+            map: Enum,
+            unit: Enum,
+            tuple: Enum,
+            option_some: Enum,
+            option_none: Enum,
+            struct_variant: Enum,
+            tuple_struct: Enum,
+        }
+
+        let expected = Variants {
+            bool: Bool(false),
+            u8: U8(255),
+            i8: I8(-128),
+            u16: U16(65_535),
+            i16: I16(-32_768),
+            u32: U32(4_294_967_295),
+            i32: I32(-2_147_483_648),
+            u64: U64(18_446_744_073_709_551_615),
+            i64: I64(-9_223_372_036_854_775_808),
+            f64: F64(420.69),
+            char: Char('A'),
+            string: StringVariant("OwO".to_owned()),
+            sequence: Sequence([1, 1, 2, 3]),
+            map: Map([(-1, 29), (1, 100)].iter().map(|x| *x).collect()),
+            unit: Unit(()),
+            tuple: Tuple((17, 06)),
+            option_some: OptionVariant(Some(1337)),
+            option_none: OptionVariant(None),
+            struct_variant: StructVariant(Struct { a: 12, b: 24 }),
+            tuple_struct: TupleStructVariant(TupleStruct(7, 27, 37)),
+        };
+
+        let text = r#"Variants {
+    bool: false,
+    u8: 255,
+    i8: -128,
+    u16: 65_535,
+    i16: -32_768,
+    u32: 4_294_967_295,
+    i32: -2_147_483_648,
+    u64: 18_446_744_073_709_551_615,
+    i64: -9_223_372_036_854_775_808,
+    f64: 420.69,
+    char: 'A',
+    string: "OwO",
+    sequence: [1, 1, 2, 3],
+    map: [-1: 29, 1: 100],
+    unit: (),
+    tuple: (17, 06),
+    option_some: Some(1337),
+    option_none: None,
+    struct_variant: Struct { a: 12, b: 24 },
+    tuple_struct: TupleStruct(7, 27, 37),
+}"#;
+        assert_eq!(from_str::<Variants>(text).unwrap(), expected);
+    }
+
+    // Some variants are deserialized in the exact same way in serde's untagged enums, so we can't
+    // add both in the same enum. f32 is the same as f64 and Unit Struct is the same as Unit.
+    #[test]
+    pub fn deserialize_any_2() {
+        use Enum::*;
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        #[serde(untagged)]
+        enum Enum {
+            F32(f32),
+            UnitStructVariant(UnitStruct),
+        }
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct UnitStruct;
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Variants {
+            f32: Enum,
+            unit_struct_1: Enum,
+            unit_struct_2: Enum,
+        }
+
+        let expected = Variants {
+            f32: F32(69.420),
+            unit_struct_1: UnitStructVariant(UnitStruct),
+            unit_struct_2: UnitStructVariant(UnitStruct {}),
+        };
+
+        let text = r#"Variants {
+    f32: 69.420,
+    unit_struct_1: UnitStruct,
+    unit_struct_2: UnitStruct {},
+}"#;
+        assert_eq!(from_str::<Variants>(text).unwrap(), expected);
     }
 }
