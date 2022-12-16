@@ -1,6 +1,6 @@
 [package]
 name = "rudano"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Aphek <bilkow@tutanota.com>"]
 edition = "2018"
 description = "A data serialization format as similar as possible to Rust's own syntax"
